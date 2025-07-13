@@ -34,7 +34,7 @@ import {
   ChevronDown,
   MessageSquare as ChatIcon
 } from 'lucide-react'
-import { cn, formatTimestamp, copyToClipboard, validateApiKey, generateId } from '@/lib/utils'
+import { cn, formatTimestamp, copyToClipboard, validateApiKey, generateId, saveChatHistory, loadChatHistory, getAllChatHistoryCookies, clearChatHistory } from '@/lib/utils'
 import { AI_PERSONALITIES } from '@/lib/personalities'
 import type { Message, Person, ChatMessage, ChatConversation, AIPersonality, PersonTab, PersonWithTabs, Model } from '@/types'
 
@@ -147,12 +147,82 @@ export default function DashboardPage() {
         setSelectedTab(parsedPeople[0].tabs[0])
       }
     }
+
+    // Load conversations from localStorage
+    let parsedConversations: ChatConversation[] = []
     if (savedConversations) {
-      setConversations(JSON.parse(savedConversations))
+      try {
+        parsedConversations = JSON.parse(savedConversations)
+        if (!Array.isArray(parsedConversations)) parsedConversations = []
+      } catch {
+        parsedConversations = []
+      }
     }
+
+    // Load coach messages from localStorage
+    let parsedCoachMessages: Message[] = []
     if (savedCoachMessages) {
-      setCoachMessages(JSON.parse(savedCoachMessages))
+      try {
+        parsedCoachMessages = JSON.parse(savedCoachMessages)
+        if (!Array.isArray(parsedCoachMessages)) parsedCoachMessages = []
+      } catch {
+        parsedCoachMessages = []
+      }
     }
+
+    // Load chat history from cookies and merge with localStorage data
+    const cookieHistory = getAllChatHistoryCookies()
+    
+    // Merge coach messages from cookies if available
+    if (cookieHistory['coach'] && cookieHistory['coach'].length > 0) {
+      const cookieCoachMessages: Message[] = cookieHistory['coach'].map((msg, index) => ({
+        id: generateId(),
+        prompt: msg.role === 'user' ? msg.content : '',
+        response: msg.role === 'assistant' ? msg.content : '',
+        model: selectedModel,
+        timestamp: new Date().toISOString(),
+        isUser: msg.role === 'user'
+      }))
+      
+      // If we have cookie data and no localStorage data, use cookie data
+      if (parsedCoachMessages.length === 0) {
+        parsedCoachMessages = cookieCoachMessages
+      }
+    }
+
+    // Merge conversation data from cookies
+    Object.keys(cookieHistory).forEach(conversationId => {
+      if (conversationId !== 'coach') {
+        const cookieMessages: ChatMessage[] = cookieHistory[conversationId].map((msg, index) => ({
+          id: generateId(),
+          text: msg.content,
+          sender: msg.role === 'user' ? 'them' : 'ai',
+          timestamp: new Date().toISOString(),
+          isRead: true
+        }))
+
+        const existingConversation = parsedConversations.find(conv => conv.id === conversationId)
+        if (existingConversation) {
+          // Merge cookie data with existing conversation
+          existingConversation.messages = [...existingConversation.messages, ...cookieMessages]
+        } else {
+          // Create new conversation from cookie data
+          const [personId, tabId] = conversationId.split('-')
+          const newConversation: ChatConversation = {
+            id: conversationId,
+            personId: personId,
+            messages: cookieMessages,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }
+          parsedConversations.push(newConversation)
+        }
+      }
+    })
+
+    setConversations(parsedConversations)
+    setCoachMessages(parsedCoachMessages)
+
     if (savedPersonality) {
       setSelectedPersonality(savedPersonality)
     }
@@ -419,7 +489,8 @@ export default function DashboardPage() {
           personality: selectedPersonality,
           model: selectedModel,
           apiKey: apiKey,
-          conversationHistory: conversationHistory
+          conversationHistory: conversationHistory,
+          conversationId: 'coach'
         })
       })
 
@@ -439,6 +510,14 @@ export default function DashboardPage() {
       }
 
       setCoachMessages(prev => [...prev, aiMessage])
+
+      // Save to cookie as backup
+      const updatedHistory = [
+        ...conversationHistory,
+        { role: 'user' as const, content: userMessage.prompt },
+        { role: 'assistant' as const, content: data.response }
+      ]
+      saveChatHistory('coach', updatedHistory)
 
     } catch (error: any) {
       console.error('Error sending message:', error)
@@ -477,7 +556,8 @@ export default function DashboardPage() {
           context: `Conversation with ${selectedPerson.name}`,
           model: selectedModel,
           apiKey: apiKey,
-          conversationHistory: conversationHistory
+          conversationHistory: conversationHistory,
+          conversationId: conversationId
         })
       })
 
@@ -496,7 +576,6 @@ export default function DashboardPage() {
         isRead: true
       }
 
-      const conversationId = `${selectedPerson.id}-${selectedTab.id}`
       setConversations(prevConversations => {
         return prevConversations.map(conv => {
           if (conv.id === conversationId) {
@@ -509,6 +588,14 @@ export default function DashboardPage() {
           return conv
         })
       })
+
+      // Save to cookie as backup
+      const updatedHistory = [
+        ...conversationHistory,
+        { role: 'user' as const, content: message },
+        { role: 'assistant' as const, content: data.reply }
+      ]
+      saveChatHistory(conversationId, updatedHistory)
 
     } catch (error: any) {
       console.error('Error generating reply:', error)
@@ -589,6 +676,12 @@ export default function DashboardPage() {
       setConversations([])
       localStorage.removeItem('wingman-coach-messages')
       localStorage.removeItem('wingman-conversations')
+      
+      // Clear all chat history cookies
+      const cookieHistory = getAllChatHistoryCookies()
+      Object.keys(cookieHistory).forEach(conversationId => {
+        clearChatHistory(conversationId)
+      })
     }
   }
 
@@ -599,6 +692,7 @@ export default function DashboardPage() {
       if (confirm('Are you sure you want to clear the coach chat?')) {
         setCoachMessages([])
         localStorage.removeItem('wingman-coach-messages')
+        clearChatHistory('coach')
       }
     } else if (selectedTab.type === 'reply') {
       if (confirm('Are you sure you want to clear this conversation?')) {
@@ -615,6 +709,9 @@ export default function DashboardPage() {
           updatedAt: conv.updatedAt
         }))
         localStorage.setItem('wingman-conversations', JSON.stringify(conversationsToSave))
+        
+        // Clear cookie for this conversation
+        clearChatHistory(conversationId)
       }
     }
   }

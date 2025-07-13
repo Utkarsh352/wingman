@@ -63,3 +63,87 @@ export const PAID_MODELS = [
   { id: 'google/gemini-1.5-flash', name: 'Gemini 1.5 Flash (Paid)', provider: 'Google', isFree: false },
   { id: 'meta-llama/llama-3.1-405b-instruct', name: 'Llama 3.1 405B Instruct (Paid)', provider: 'Meta', isFree: false }
 ] 
+
+// Cookie utilities for chat history persistence
+export const setCookie = (name: string, value: string, days: number = 30) => {
+  if (typeof window === 'undefined') return
+  
+  const expires = new Date()
+  expires.setTime(expires.getTime() + (days * 24 * 60 * 60 * 1000))
+  document.cookie = `${name}=${encodeURIComponent(value)};expires=${expires.toUTCString()};path=/;SameSite=Lax`
+}
+
+export const getCookie = (name: string): string | null => {
+  if (typeof window === 'undefined') return null
+  
+  const nameEQ = name + "="
+  const ca = document.cookie.split(';')
+  for (let i = 0; i < ca.length; i++) {
+    let c = ca[i]
+    while (c.charAt(0) === ' ') c = c.substring(1, c.length)
+    if (c.indexOf(nameEQ) === 0) {
+      return decodeURIComponent(c.substring(nameEQ.length, c.length))
+    }
+  }
+  return null
+}
+
+export const deleteCookie = (name: string) => {
+  if (typeof window === 'undefined') return
+  
+  document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;`
+}
+
+// Chat history cookie management
+export const saveChatHistory = (conversationId: string, messages: any[]) => {
+  try {
+    const historyData = {
+      conversationId,
+      messages,
+      timestamp: new Date().toISOString()
+    }
+    setCookie(`chat-history-${conversationId}`, JSON.stringify(historyData), 30)
+  } catch (error) {
+    console.error('Failed to save chat history to cookie:', error)
+  }
+}
+
+export const loadChatHistory = (conversationId: string): any[] => {
+  try {
+    const cookieData = getCookie(`chat-history-${conversationId}`)
+    if (cookieData) {
+      const historyData = JSON.parse(cookieData)
+      return historyData.messages || []
+    }
+  } catch (error) {
+    console.error('Failed to load chat history from cookie:', error)
+  }
+  return []
+}
+
+export const clearChatHistory = (conversationId: string) => {
+  deleteCookie(`chat-history-${conversationId}`)
+}
+
+// Get all chat history cookies
+export const getAllChatHistoryCookies = (): { [key: string]: any[] } => {
+  if (typeof window === 'undefined') return {}
+  
+  const history: { [key: string]: any[] } = {}
+  const cookies = document.cookie.split(';')
+  
+  cookies.forEach(cookie => {
+    const [name, value] = cookie.trim().split('=')
+    if (name.startsWith('chat-history-')) {
+      try {
+        const conversationId = name.replace('chat-history-', '')
+        const historyData = JSON.parse(decodeURIComponent(value))
+        history[conversationId] = historyData.messages || []
+      } catch (error) {
+        console.error('Failed to parse chat history cookie:', error)
+      }
+    }
+  })
+  
+  return history
+} 

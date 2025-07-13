@@ -62,6 +62,7 @@ export interface ReplyRequest {
   apiKey: string;
   model?: string;
   conversationHistory?: ConversationMessage[];
+  conversationId?: string;
 }
 
 export interface CoachRequest {
@@ -71,6 +72,7 @@ export interface CoachRequest {
   apiKey: string;
   model?: string;
   conversationHistory?: ConversationMessage[];
+  conversationId?: string;
 }
 
 export interface ChatMessage {

@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { AI_PERSONALITIES } from '@/lib/personalities'
 import { generateId } from '@/lib/utils'
-import type { ReplyRequest, ApiError } from '@/types'
+import { loadChatHistoryFromCookie, saveChatHistoryToCookie } from '@/lib/cookies'
+import type { ReplyRequest, ApiError, ConversationMessage } from '@/types'
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 
 export async function POST(request: NextRequest) {
   try {
     const body: ReplyRequest = await request.json()
-    const { message, personality, context, apiKey, model = 'mistralai/mistral-7b-instruct', conversationHistory = [] } = body
+    const { message, personality, context, apiKey, model = 'mistralai/mistral-7b-instruct', conversationHistory = [], conversationId } = body
 
     if (!message || !personality || !apiKey) {
       return NextResponse.json<ApiError>({
@@ -21,6 +22,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json<ApiError>({
         error: 'Invalid personality selected'
       }, { status: 400 })
+    }
+
+    // Load chat history from cookies if not provided and conversationId is available
+    let finalConversationHistory = conversationHistory
+    if (conversationHistory.length === 0 && conversationId) {
+      finalConversationHistory = loadChatHistoryFromCookie(request, conversationId)
     }
 
     const systemPrompt = `You are a reply generator. I'll tell you her texts, generate a suitable, brief reply to her texts so she stays interested in me.
@@ -39,7 +46,7 @@ IMPORTANT:
 Context: ${context || 'No additional context provided'}
 
 Previous conversation:
-${conversationHistory.length > 0 ? conversationHistory.map(msg => `${msg.role === 'user' ? 'You' : 'Her'}: ${msg.content}`).join('\n') : 'No previous conversation'}
+${finalConversationHistory.length > 0 ? finalConversationHistory.map(msg => `${msg.role === 'user' ? 'You' : 'Her'}: ${msg.content}`).join('\n') : 'No previous conversation'}
 
 Her message: "${message}"
 
@@ -60,7 +67,7 @@ Generate a brief, confident reply:`
             role: 'system',
             content: systemPrompt
           },
-          ...conversationHistory,
+          ...finalConversationHistory,
           {
             role: 'user',
             content: message
@@ -82,12 +89,25 @@ Generate a brief, confident reply:`
     const data = await response.json()
     const reply = data.choices[0]?.message?.content?.trim() || 'Sorry, I could not generate a reply.'
 
-    return NextResponse.json({
+    // Create response object
+    const responseObj = NextResponse.json({
       id: generateId(),
       reply: reply,
       model: model,
       timestamp: new Date().toISOString()
     })
+
+    // Save updated conversation history to cookie if conversationId is provided
+    if (conversationId) {
+      const updatedHistory: ConversationMessage[] = [
+        ...finalConversationHistory,
+        { role: 'user', content: message },
+        { role: 'assistant', content: reply }
+      ]
+      saveChatHistoryToCookie(responseObj, conversationId, updatedHistory)
+    }
+
+    return responseObj
 
   } catch (error) {
     console.error('Reply API error:', error)

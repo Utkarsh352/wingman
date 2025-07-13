@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { AI_PERSONALITIES } from '@/lib/personalities'
 import { generateId } from '@/lib/utils'
-import type { CoachRequest, ApiError } from '@/types'
+import { loadChatHistoryFromCookie, saveChatHistoryToCookie } from '@/lib/cookies'
+import type { CoachRequest, ApiError, ConversationMessage } from '@/types'
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 
 export async function POST(request: NextRequest) {
   try {
     const body: CoachRequest = await request.json()
-    const { message, personality, context, apiKey, model = 'mistralai/mistral-7b-instruct', conversationHistory = [] } = body
+    const { message, personality, context, apiKey, model = 'mistralai/mistral-7b-instruct', conversationHistory = [], conversationId = 'coach' } = body
 
     if (!message || !personality || !apiKey) {
       return NextResponse.json<ApiError>({
@@ -21,6 +22,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json<ApiError>({
         error: 'Invalid personality selected'
       }, { status: 400 })
+    }
+
+    // Load chat history from cookies if not provided
+    let finalConversationHistory = conversationHistory
+    if (conversationHistory.length === 0) {
+      finalConversationHistory = loadChatHistoryFromCookie(request, conversationId)
     }
 
     const systemPrompt = `You are a dating coach. I'll tell you about the girl, analyze and guide me on it.
@@ -39,7 +46,7 @@ IMPORTANT:
 Context: ${context || 'No additional context provided'}
 
 Previous conversation:
-${conversationHistory.length > 0 ? conversationHistory.map(msg => `${msg.role === 'user' ? 'You' : 'Coach'}: ${msg.content}`).join('\n') : 'No previous conversation'}
+${finalConversationHistory.length > 0 ? finalConversationHistory.map(msg => `${msg.role === 'user' ? 'You' : 'Coach'}: ${msg.content}`).join('\n') : 'No previous conversation'}
 
 My question: "${message}"
 
@@ -60,7 +67,7 @@ Analyze and guide me:`
             role: 'system',
             content: systemPrompt
           },
-          ...conversationHistory,
+          ...finalConversationHistory,
           {
             role: 'user',
             content: message
@@ -82,12 +89,23 @@ Analyze and guide me:`
     const data = await response.json()
     const aiResponse = data.choices[0]?.message?.content || 'Sorry, I could not generate a response.'
 
-    return NextResponse.json({
+    // Create response object
+    const responseObj = NextResponse.json({
       id: generateId(),
       response: aiResponse,
       model: model,
       timestamp: new Date().toISOString()
     })
+
+    // Save updated conversation history to cookie
+    const updatedHistory: ConversationMessage[] = [
+      ...finalConversationHistory,
+      { role: 'user', content: message },
+      { role: 'assistant', content: aiResponse }
+    ]
+    saveChatHistoryToCookie(responseObj, conversationId, updatedHistory)
+
+    return responseObj
 
   } catch (error) {
     console.error('Chat API error:', error)
